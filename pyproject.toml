@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redusaxs"
+version = "0.1.0"
+description = "Graphical toolbox for SAXS data reduction"
+readme = "README.md"
+requires-python = ">=3.10"
+
+authors = [
+    {name="Nicolas Ratel"}
+]
+
+dependencies = [
+    "numpy==1.26.4",
+    "scipy==1.13.0",
+    "matplotlib==3.8.4",
+    "PyQt5==5.15.11",
+    "fabio==2024.4.0",
+    "h5py==3.11.0",
+    "silx==2.1.0",
+    "pyFAI==2024.2.0",
+]
+
+[project.scripts]
+redusaxs = "redusaxs.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

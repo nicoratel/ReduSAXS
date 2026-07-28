@@ -1,0 +1,11 @@
+fabio==2024.4.0
+h5py==3.11.0
+matplotlib==3.8.4
+matplotlib-inline==0.1.7
+numpy==1.26.4
+pyFAI==2024.2.0
+PyQt5==5.15.11
+PyQt5-Qt5==5.15.2
+PyQt5_sip==12.17.0
+scipy==1.13.0
+silx==2.1.0
