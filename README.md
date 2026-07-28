@@ -34,14 +34,9 @@ or
 python -m redusaxs
 ```
 
-## Requirements
 
-- Python >= 3.10
-- pyFAI
-- silx
-- PyQt5
 
 ## Author
 
-Nicolas Ratel
+Nicolas Ratel-Ramond
 CNRS
