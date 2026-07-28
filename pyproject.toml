@@ -24,6 +24,9 @@ dependencies = [
     "pyFAI==2024.2.0",
 ]
 
+
+license = "MIT"
+
 [project.scripts]
 redusaxs = "redusaxs.cli:main"
 
