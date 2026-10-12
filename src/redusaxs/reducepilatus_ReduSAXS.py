@@ -8,6 +8,65 @@ from pyFAI.detectors import Detector
 import math
 from scipy.interpolate import griddata
 from matplotlib.colors import LogNorm
+from matplotlib.patches import Wedge
+
+
+def _common_label_prefix(labels):
+    """Longest prefix shared by all labels, cut after a '-' or '_' so no name is split mid-token."""
+    if len(labels) < 2:
+        return ''
+    prefix = os.path.commonprefix(labels)
+    cut = max(prefix.rfind('-'), prefix.rfind('_'))
+    return prefix[:cut + 1] if cut >= 3 else ''
+
+
+def place_legend_outside(fig, ax, max_width_frac=0.55):
+    """
+    Legend to the right of the axes, split into as many columns as needed to
+    fit the axes height. Kept out of tight_layout, which otherwise squashes
+    the axes vertically as soon as the legend is taller than the plot.
+    """
+    # A canvas on a hidden tab reports a zero-size figure, and laying out
+    # against it makes tight_layout invert a singular transform.
+    if fig.bbox.width < 1 or fig.bbox.height < 1:
+        return
+    old = ax.get_legend()
+    if old is not None:
+        old.remove()
+    handles, labels = ax.get_legend_handles_labels()
+    if not handles:
+        fig.tight_layout()
+        return
+
+    prefix = _common_label_prefix(labels)
+    short_labels = [label[len(prefix):] for label in labels]
+    title = prefix.rstrip('-_') or None
+
+    renderer = fig.canvas.get_renderer()
+    fig_w = fig.bbox.width
+    for fontsize in (8, 7, 6):
+        fig.tight_layout()
+        axes_h = ax.get_window_extent(renderer).height
+        row_h = 1.7 * fontsize * fig.dpi / 72
+        rows = max(1, int(axes_h // row_h) - (1 if title else 0))
+        ncol = -(-len(handles) // rows)
+        leg = ax.legend(handles, short_labels, loc='upper left', bbox_to_anchor=(1.01, 1),
+                        borderaxespad=0, fontsize=fontsize, ncol=ncol, frameon=False,
+                        columnspacing=1.0, handlelength=1.5,
+                        title=title, title_fontsize=fontsize + 1, alignment='left')
+        leg.set_in_layout(False)
+        width_frac = leg.get_window_extent(renderer).width / fig_w + 0.02
+        if width_frac <= max_width_frac or fontsize == 6:
+            break
+        leg.remove()
+    fig.tight_layout(rect=(0, 0, max(1 - width_frac, 1 - max_width_frac), 1))
+
+    if not getattr(fig, '_legend_resize_cid', None):
+        def _on_resize(_event):
+            place_legend_outside(fig, ax, max_width_frac)
+            fig.canvas.draw_idle()
+        fig._legend_resize_cid = fig.canvas.mpl_connect('resize_event', _on_resize)
+
 
 class EdfFiles:
     def __init__(self, files, maskfile=None,invertmask=False):
@@ -487,6 +546,7 @@ class SAXSDataSet():
                
         ## deal with referencefiles
         self.k = k
+        self.refine_info = None
         if referencefiles:
             self.referencefiles = EdfFiles(referencefiles,maskfile)
             
@@ -496,7 +556,8 @@ class SAXSDataSet():
             if refineflag:
                 self.qseuil = qseuil
                 self.plotrefine = plotrefine
-                self.k, qmax_ref,qsample_ref = self.refine()
+                self.k, qmax_ref, qsample_ref = self.refine()
+                self.refine_info = (self.k, qmax_ref, qsample_ref)
                 self.refdata *= self.k
             else:
                 self.refdata *= self.k
@@ -530,131 +591,145 @@ class SAXSDataSet():
         if self.ismask:
             self.caving()
 
+    def qmap(self, qmin=0, qmax=0.2, rotate=False, resolution=1000):
+        """Normalized intensity regridded on a regular (Qx, Qz) grid for qmin <= |q| <= qmax: (QX, QZ, Z)."""
+        di = ((np.arange(self.number_pixel_y) - self.x_center) * self.pix_size)[None, :]
+        dj = ((np.arange(self.number_pixel_x) - self.y_center) * self.pix_size)[:, None]
+        denom = np.sqrt(self.D**2 + di**2 + dj**2)
+        a = 2 * np.pi / self.wl
+        qx = (a * di / denom) * 1e-10
+        qy = (a / denom) * (self.D - denom) * 1e-10
+        qz = (a * dj / denom) * 1e-10
+
+        qnorm = np.sqrt(qx**2 + qy**2 + qz**2)
+        mask = (qnorm >= qmin) & (qnorm <= qmax)
+        qx_masked, qz_masked, intensity = qx[mask], qz[mask], self.data[mask]
+        if len(qx_masked) < 4:
+            raise ValueError(f"Too few detector pixels between qmin={qmin} and qmax={qmax} to build a 2D image.")
+        intensity = intensity / np.nanmax(intensity)
+
+        qx_lin = np.linspace(qx_masked.min(), qx_masked.max(), resolution)
+        qz_lin = np.linspace(qz_masked.min(), qz_masked.max(), resolution)
+        QX, QZ = np.meshgrid(qx_lin, qz_lin)
+        Z = griddata((qx_masked, qz_masked), intensity, (QX, QZ), method='linear')
+        if rotate:
+            Z = np.rot90(Z, k=-1)  # -1 pour sens horaire
+            QZ, QX = np.rot90(QX, k=-1), np.rot90(QZ, k=-1)
+        return QX, QZ, Z
+
+    @staticmethod
+    def draw_qmap(fig, ax, QX, QZ, Z, qmax=0.2, vmin=-3, vmax=0, cmap='turbo', qcircles=None,
+                  draw_sectors=False, nb_azimuths=2, width=10, offset=0, delta=90, fontsize=12):
+        """Draw a qmap() result on ax, with optional constant-q circles and integration sectors (half width `width`)."""
+        norm = LogNorm(vmin=10**(vmin), vmax=10**vmax)
+        mesh = ax.pcolormesh(QX, -QZ, Z, shading='auto', cmap=cmap, norm=norm)
+        ax.set_xlabel(r"$Q_x (\AA^{-1})$", fontsize=fontsize)
+        ax.set_ylabel(r"$Q_z (\AA^{-1})$", fontsize=fontsize)
+        cbar = fig.colorbar(mesh, ax=ax, shrink=0.5, aspect=20)
+        cbar.set_label("Normalized Intensity", fontsize=fontsize)
+        cbar.ax.tick_params(labelsize=fontsize)
+        ax.set_aspect('equal')
+        fig.tight_layout()
+
+        def format_coord(x, z):
+            q = math.hypot(x, z)
+            # The image is drawn against -Qz and the sector wedges at -azimuth, so
+            # negating the on-screen angle gives the same chi as the azimuthal profile.
+            parts = [f"q={q:.4f} A-1"]
+            if q > 0:
+                parts.append(f"d={2 * np.pi / q / 10:.3f} nm")
+            parts.append(f"chi={-math.degrees(math.atan2(z, x)):.1f}deg")
+            return "   ".join(parts)
+
+        ax.format_coord = format_coord
+
+        if qcircles is not None:
+            colors = ['black','purple','pink','palegreen']
+            # prendre les limites effectives de l'axe (après pcolormesh)
+            xmin, xmax = sorted(ax.get_xlim())
+            zmin, zmax = sorted(ax.get_ylim())
+            for i, q_val in enumerate(qcircles):
+                q_val = float(q_val)
+                theta = np.linspace(0, 2*np.pi, 2000)
+                x_circle = q_val * np.cos(theta)
+                # adapter l'ordonnée au système de l'affichage (on a tracé -QZ)
+                z_plot = -q_val * np.sin(theta)
+                # garder uniquement les points du cercle qui tombent dans la fenêtre affichée
+                mask = (x_circle >= xmin) & (x_circle <= xmax) & (z_plot >= zmin) & (z_plot <= zmax)
+                if not np.any(mask):
+                    continue
+                ax.plot(x_circle[mask], z_plot[mask], linestyle='dashed', color=colors[i % len(colors)], linewidth=2)
+                x_text = -q_val
+                z_text = q_val*(-1)**i
+                if x_text<xmin or x_text>xmax:
+                    x_text = -x_text
+                if z_text<zmin or z_text>zmax:
+                    z_text=-z_text
+                ax.text(x_text, z_text + 0.002, f"{q_val:.3f}",
+                        color=colors[i % len(colors)], fontsize=fontsize - 2,
+                        ha='center', va='bottom',
+                        bbox=dict(facecolor='white', alpha=1, edgecolor='none', pad=1),
+                        clip_on=True)
+
+        if draw_sectors:
+            wedge_colors = ['red', 'lime', 'cyan', 'yellow', 'magenta', 'orange', 'blue']
+            for n in range(nb_azimuths):
+                az = ((offset + n * delta + 180) % 360) - 180
+                min_az = az - width
+                max_az = az + width
+                color = wedge_colors[n % len(wedge_colors)]
+                # Wedge: angles in degrees CCW from +x, inverted for -Qz
+                ax.add_patch(Wedge((0.0, 0.0), qmax, -max_az % 360, -min_az % 360,
+                                   facecolor='none', edgecolor=color, linestyle='-',
+                                   linewidth=1.2, alpha=0.9, zorder=5))
+                for th in (min_az, max_az):
+                    th_rad = math.radians(-th)
+                    ax.plot([0.0, qmax * math.cos(th_rad)], [0.0, qmax * math.sin(th_rad)],
+                            linestyle='-', color=color, linewidth=1.2, alpha=0.9, zorder=6)
+                bisector_rad = math.radians(-az)
+                ax.text(0.75 * qmax * math.cos(bisector_rad), 0.75 * qmax * math.sin(bisector_rad),
+                        f"{az:.0f}°\n±{width:.0f}°", color=color,
+                        fontsize=fontsize - 3, ha='center', va='center',
+                        bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'), zorder=7)
+            ax.set_aspect('equal', adjustable='box')
+
     def plot2d_vsq(
-        self,
-        qmin:float = 0,
-        qmax:float = 0.2,
-        vmin:float = -3,
-        vmax:float = 0,
-        qcircles:tuple = None,
-        show:bool=False,
-        rotate:bool=False,
-        cmap:str = 'jet'): 
-        
+            self,
+            qmin:float = 0,
+            qmax:float = 0.2,
+            vmin:float = -3,
+            vmax:float = 0,
+            qcircles:tuple=None,
+            show:bool=False,
+            rotate:bool=False,
+            cmap:str = 'turbo',
+            draw_sectors:bool=False,
+            nb_azimuths: int = 2,
+            width: float = 10,      # half-width in degrees (same convention as sector_integration)
+            offset: float = 0,      # degrees
+            delta: float = 90,      # degrees between sector centers
+            save_npz: bool = False,
+            qmap_result=None
+        ):
+        QX, QZ, Z = qmap_result if qmap_result is not None else self.qmap(qmin, qmax, rotate)
+        fig = plt.figure(dpi=200)
+        self.draw_qmap(fig, fig.gca(), QX, QZ, Z, qmax=qmax, vmin=vmin, vmax=vmax, cmap=cmap, qcircles=qcircles,
+                       draw_sectors=draw_sectors, nb_azimuths=nb_azimuths, width=width, offset=offset, delta=delta)
 
-            # Compute qx, qy, qz
-            qx = np.zeros(self.data.shape, dtype=float)
-            qy = np.zeros(self.data.shape, dtype=float)
-            qz = np.zeros(self.data.shape, dtype=float)
-            for i in range(self.number_pixel_y):
-                delta_i = (i - self.x_center) * self.pix_size
-                for j in range(self.number_pixel_x):
-                    delta_j = (j - self.y_center) * self.pix_size
-                    denom = np.sqrt(self.D**2 + delta_i**2 + delta_j**2)
-                    a = 2 * np.pi / self.wl
-                    qx[j, i] = (a * delta_i / denom) * 1e-10
-                    qy[j, i] = (a / denom) * (self.D - denom) * 1e-10
-                    qz[j, i] = (a * delta_j / denom) * 1e-10
-
-            # Compute |q| and mask
-            qnorm = np.sqrt(qx**2 + qy**2 + qz**2)
-            
-            mask = (qnorm >= qmin) & (qnorm <= qmax)
-            qx_masked, qz_masked, intensity = qx[mask], qz[mask], self.data[mask]
-        
-
-            # Normalize intensity
-            intensity = intensity / np.nanmax(intensity)
-
-            # Interpolate onto regular grid
-            if len(qx_masked) < 4:
-                # Trop peu de points pour interpolation linéaire => scatter plot
-                plt.figure(figsize=(6,6))
-                sc = plt.scatter(qx_masked, qz_masked, c=intensity, cmap=cmap,
-                                vmin=vmin, vmax=vmax)
-                plt.xlabel("qx (Å⁻¹)")
-                plt.ylabel("qz (Å⁻¹)")
-                plt.colorbar(sc, label="Normalized Intensity")
-                plt.gca().set_aspect('equal')
-                plt.show()
-                return
-
-            qx_lin = np.linspace(qx_masked.min(), qx_masked.max(), 1000)
-            qz_lin = np.linspace(qz_masked.min(), qz_masked.max(), 1000)
-            QX, QZ = np.meshgrid(qx_lin, qz_lin)
-            Q = np.sqrt(QX**2+QZ**2)
-            Z = griddata((qx_masked, qz_masked), intensity, (QX, QZ), method='linear')
-            if rotate:
-                Z = np.rot90(Z, k=-1)  # -1 pour sens horaire
-                QZ, QX = np.rot90(QX, k=-1), np.rot90(QZ, k=-1)
-            # Plot
-            plt.figure(dpi=200)
-            norm = LogNorm(vmin=10**(vmin), vmax=10**vmax)
-            mesh = plt.pcolormesh(QX, -QZ, Z, shading='auto', cmap=cmap, norm=norm)
-            plt.xlabel(r"$Q_x (\AA^{-1})$",fontsize = 12)
-            plt.ylabel(r"$Q_z (\AA^{-1})$",fontsize = 12)
-            cbar = plt.colorbar(mesh,shrink = 0.5, aspect= 20)
-            cbar.set_label("Normalized Intensity", fontsize=12)
-            cbar.ax.tick_params(labelsize=12)  # taille des chiffres sur la barre
-            plt.gca().set_aspect('equal')
-            plt.tight_layout()
-            # save figure
-            outputdir = self.folder +'/png_images/'
-            os.makedirs(outputdir,exist_ok=True)
+        outputdir = self.folder +'/png_images/'
+        os.makedirs(outputdir,exist_ok=True)
+        if save_npz:
             npyfile=outputdir+f'{self.samplename}_Img_{self.number}'
             np.savez(npyfile,Qx=QX, QZ=-QZ, Z=Z)
-            # ---- Ajouter les cercles de q constants (partie visible seulement) ----
-            if qcircles is not None:
-                colors = ['black','purple','pink','palegreen']
-                ax = plt.gca()
 
-                # prendre les limites effectives de l'axe (après pcolormesh)
-                xmin, xmax = sorted(ax.get_xlim())
-                ymin, ymax = sorted(ax.get_ylim())
-
-                for i, q_val in enumerate(qcircles):
-                    q_val=float(q_val)
-                    theta = np.linspace(0, 2*np.pi, 2000)      # haute résolution pour éviter les trous
-                    x_circle = q_val * np.cos(theta)
-                    y_circle = q_val * np.sin(theta)
-
-                    # adapter l'ordonnée au système de l'affichage (on a tracé -QZ)
-                    y_plot = -y_circle
-
-                    # masque 1D : garder uniquement les points du cercle qui tombent dans la fenêtre affichée
-                    mask = (x_circle >= xmin) & (x_circle <= xmax) & (y_plot >= ymin) & (y_plot <= ymax)
-
-                    # si aucune portion visible, on saute
-                    if not np.any(mask):
-                        continue
-
-                    # tracer la portion visible
-                    ax.plot(x_circle[mask], y_plot[mask],
-                            linestyle='dashed', color=colors[i % len(colors)], linewidth=2)
-
-                    
-                    x_text = -q_val
-                    y_text = q_val*(-1)**i
-                    if x_text<xmin or x_text>xmax:
-                        x_text = -x_text
-                    if y_text<ymin or y_text>ymax:
-                        y_text=-y_text
-
-                    # petit décalage pour que le texte ne chevauche pas le trait (décalage relatif à la hauteur de l'axe)
-                    y_offset = 0.002
-                    
-                    ax.text(x_text, y_text + y_offset, f"{q_val:.3f}",
-                            color=colors[i % len(colors)], fontsize=10,
-                            ha='center', va='bottom',
-                            bbox=dict(facecolor='white', alpha=1, edgecolor='none', pad=1),
-                            clip_on=True)
-            figname = outputdir + f'{self.samplename}_Img_{self.number}.png'
-            plt.savefig(figname)
-            
-            if show:
-                plt.show()
-            #plt.close()
-            return figname
+        figname = outputdir + f'{self.samplename}_Img_{self.number}.png'
+        fig.savefig(figname)
+        
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+        return figname
 
     def caving(self,max_iter=10):
         """
@@ -730,22 +805,6 @@ class SAXSDataSet():
     def ai_from_edf(self):        
         return self.samplefiles.ai_from_edf()
     
-    def integrate(self, remove=False):
-        path = os.path.dirname(self.samplefiles.files[0])+'/radial_profiles/'
-        os.makedirs(path,exist_ok=True)
-        label=self.samplefiles.samplename +'_Img'+  self.samplefiles.number
-        output = os.path.join(path, label+"_I(q).dat")
-        nbins = 2000
-        unit_type = "q_A^-1"
-        
-        self.ai = self.ai_from_edf()
-        
-        q, i = self.ai.integrate1d(self.data, nbins, filename=output, mask=self.maskdata, unit=unit_type, normalization_factor=1)
-        if remove:
-            os.remove(output)
-        self.save_corrected_image()
-        return q, i
-
     def save_corrected_image(self):
         
         header = {
@@ -764,7 +823,7 @@ class SAXSDataSet():
         edf_img = fabio.edfimage.edfimage(data=self.data, header=header)
 
         # Write to file
-        edf_img.write(filename)   
+        edf_img.write(filename)
 
     def print_values(self):
         line2write='--------------- Sample details -----------------\n'
@@ -780,74 +839,49 @@ class SAXSDataSet():
         line2write+=f'image_size={self.samplefiles.number_pixel_x} X {self.samplefiles.number_pixel_y}pixels\n'
         print(line2write)
 
-    def save_and_plot(self,fig,ax):
-        # integrate and save
-        q,i=self.integrate(remove=False)
-        # plot   
-        label=self.samplefiles.samplename +'_Img'+  self.samplefiles.number     
-        ax.loglog(q,i,label=label)
-        ax.set_xlabel('Q ($\\AA^{-1}$)')
-        if self.absolute:
-            ax.set_ylabel('Intensity $(cm^{-1})$')
-        else:
-            ax.set_ylabel('Intensity')
-        
-        ax.legend()
-        fig.tight_layout()
-        fig.canvas.draw()
-        fig.canvas.flush_events()        
-        pass
-        
+    @property
+    def label(self):
+        return f"{self.samplename}_Img{self.number}"
 
-    def sector_integration(self,fig,ax,nb_azimuths=2,width=10, offset=0, delta=90):
-        """
-        nb_azimuths: number of azimuthal sectors to integrate
-        width: width of each sector in degrees
-        offset: offset of the first sector in degrees
-        delta: step between each sector in degrees
-        """
-        #define pyFAI integrator
-        ai=self.ai_from_edf()
-        nbins = 2000
-        unit_type = "q_A^-1"
-        #create empty arrays for plot
-        qarray=[]
-        iarray=[]
-        #plt.figure()
-        ax.set_xlabel('Q ($\\AA^{-1}$)')
-        if self.absolute:
-            ax.set_ylabel('Intensity $(cm^{-1})$')
-        else:
-            ax.set_ylabel('Intensity')
-        
-        #ax.set_title(self.samplefiles.samplename)
-        for n in np.arange(nb_azimuths):
-            azimuth=math.radians(offset+n*delta)
-            azimuth = azimuth % (2 * math.pi)  # Normalize to [0, 2π)
-            if azimuth > math.pi:
-                azimuth -= 2 * math.pi  # Adjust to [-π, π)
-            if azimuth < -math.pi:
-                azimuth += 2 * math.pi  # Adjust to [-π, π)
-            azimuth=math.degrees(azimuth)
-            path = os.path.dirname(self.samplefiles.files[0])+'/integrations/'
-            os.makedirs(path,exist_ok=True)
-            output = os.path.join(path, self.samplefiles.samplename + f"_I(q)_az={int(azimuth)}°_fullwidth={2*width}.dat")
-            
-            min_az=azimuth-width; max_az=azimuth+width
-            if min_az<-180:
-                min_az=-180
-            if max_az>180:
-                max_az=180
-            q, i = ai.integrate1d(self.data, nbins, filename=output, azimuth_range=(min_az,max_az),mask=self.maskdata, unit=unit_type, normalization_factor=1)
-            ax.loglog(q,i,label=self.samplefiles.samplename+ f"_I(q)_az={int(azimuth)}°_halfwidth={int(width)}")
-            data2save=np.column_stack([q,i])
-            np.savetxt(output,data2save)
-        
-        ax.legend()
-        fig.tight_layout()
-        fig.canvas.draw()
-        fig.canvas.flush_events()
-        self.save_corrected_image()
+    def radial_profile(self, azimuth=0, width=360, nbins=2000):
+        """I(q) in the sector centred on azimuth (°) of full width (°), clamped to [-180, 180] as in SAXS explorer; width >= 360 is the whole ring."""
+        azimuth_range = None
+        if width < 360:
+            az = ((azimuth + 180) % 360) - 180
+            azimuth_range = (max(az - width / 2, -180), min(az + width / 2, 180))
+        q, i = self.ai_from_edf().integrate1d(self.data, nbins, azimuth_range=azimuth_range, mask=self.maskdata,
+                                              unit="q_A^-1", normalization_factor=1)
+        return q, i
+
+    def sector_profiles(self, nb_azimuths=2, width=10, offset=0, delta=90, nbins=2000):
+        """[(azimuth, q, I)] for nb_azimuths sectors of half width `width` (°), centred on offset + n*delta."""
+        ai = self.ai_from_edf()
+        profiles = []
+        for n in range(nb_azimuths):
+            azimuth = (offset + n * delta) % 360
+            if azimuth > 180:
+                azimuth -= 360
+            azimuth_range = (max(azimuth - width, -180), min(azimuth + width, 180))
+            q, i = ai.integrate1d(self.data, nbins, azimuth_range=azimuth_range, mask=self.maskdata,
+                                  unit="q_A^-1", normalization_factor=1)
+            profiles.append((azimuth, q, i))
+        return profiles
+
+    def azimuthal_profile(self, qvalue, threshold, nbins=540):
+        """I(chi) integrated over the ring q in [qvalue - threshold, qvalue + threshold] (Å⁻¹), as in SAXS explorer."""
+        chi, i = self.ai_from_edf().integrate_radial(self.data, nbins, mask=self.maskdata,
+                                                     radial_range=(qvalue - threshold, qvalue + threshold),
+                                                     radial_unit="q_A^-1", unit="chi_deg")
+        return chi, i
+
+    def save_profile(self, subdir, filename, x, y, columns, description):
+        path = os.path.join(self.folder, subdir)
+        os.makedirs(path, exist_ok=True)
+        output = os.path.join(path, filename)
+        header = (f"{description}\nSample: {self.samplename}\nFiles: {', '.join(os.path.basename(f) for f in self.samplefiles.files)}\n"
+                  f"I_0={self.I_0} k={self.k} calibration_coef={self.calibration_coef}\n{columns}")
+        np.savetxt(output, np.column_stack([x, y]), header=header)
+        return output
 
     def calc_azimprofile(self,qvalue,threshold):
         """
