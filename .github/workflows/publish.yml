@@ -34,6 +34,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
+    permissions:
+      id-token: write   # requis pour l'authentification OIDC "Trusted Publishing"
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -43,5 +45,3 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
