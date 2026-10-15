@@ -867,11 +867,24 @@ class SAXSDataSet():
             profiles.append((azimuth, q, i))
         return profiles
 
-    def azimuthal_profile(self, qvalue, threshold, nbins=540):
-        """I(chi) integrated over the ring q in [qvalue - threshold, qvalue + threshold] (Å⁻¹), as in SAXS explorer."""
+    def azimuthal_profile(self, qvalue, threshold, nbins=540, shift=0.0):
+        """
+        I(chi) integrated over the ring q in [qvalue - threshold, qvalue + threshold] (Å⁻¹).
+
+        shift (°) re-cuts the curve into the window [shift-180, shift+180] instead
+        of the default [-180, 180], as SAXS explorer does. This is a periodic
+        relabeling, not an arithmetic offset: every point keeps its true physical
+        angle modulo 360° and simply takes whichever 360°-periodic representative
+        falls inside the window, so a peak near the edge can be viewed whole
+        instead of being split across both ends of the plot.
+        """
         chi, i = self.ai_from_edf().integrate_radial(self.data, nbins, mask=self.maskdata,
                                                      radial_range=(qvalue - threshold, qvalue + threshold),
                                                      radial_unit="q_A^-1", unit="chi_deg")
+        if shift:
+            chi = ((np.asarray(chi, dtype=float) - shift + 180.0) % 360.0) - 180.0 + shift
+            order = np.argsort(chi)
+            chi, i = chi[order], np.asarray(i)[order]
         return chi, i
 
     def save_profile(self, subdir, filename, x, y, columns, description):

@@ -702,6 +702,14 @@ class Ui_SAXS_TOOLBOX(object):
         self.azim_threshold_doubleSpinBox.setRange(0.00001, 1.0)
         self.azim_threshold_doubleSpinBox.setSingleStep(0.0005)
         self.horizontalLayout_45.addWidget(self.azim_threshold_doubleSpinBox)
+        self.azim_shift_label = QtWidgets.QLabel(self.azim_params_widget)
+        self.horizontalLayout_45.addWidget(self.azim_shift_label)
+        self.azim_shift_doubleSpinBox = QtWidgets.QDoubleSpinBox(self.azim_params_widget)
+        self.azim_shift_doubleSpinBox.setObjectName("azim_shift_doubleSpinBox")
+        self.azim_shift_doubleSpinBox.setDecimals(1)
+        self.azim_shift_doubleSpinBox.setRange(-180.0, 180.0)
+        self.azim_shift_doubleSpinBox.setSingleStep(15.0)
+        self.horizontalLayout_45.addWidget(self.azim_shift_doubleSpinBox)
         self.horizontalLayout_45.addStretch(1)
         self.azim_plot_pushButton = QtWidgets.QPushButton(self.azim_params_widget)
         self.azim_plot_pushButton.setObjectName("azim_plot_pushButton")
@@ -709,28 +717,35 @@ class Ui_SAXS_TOOLBOX(object):
         self.azim_save_pushButton = QtWidgets.QPushButton(self.azim_params_widget)
         self.azim_save_pushButton.setObjectName("azim_save_pushButton")
         self.horizontalLayout_45.addWidget(self.azim_save_pushButton)
-        self.sector_plot_tabWidget = QtWidgets.QTabWidget(self.verticalLayoutWidget)
-        self.sector_plot_tabWidget.setObjectName("sector_plot_tabWidget")
-        self.sector_plot_page = QtWidgets.QWidget()
-        self.sector_plot_page_layout = QtWidgets.QVBoxLayout(self.sector_plot_page)
-        self.sector_plot_page_layout.setContentsMargins(0, 0, 0, 0)
-        self.sector_plot_page_layout.addWidget(self.sector_params_widget)
-        self.MplWidget_4 = MplWidget(self.sector_plot_page)
+        self.verticalLayout_32.addWidget(self.sector_params_widget)
+        self.sector_plot_frame = QtWidgets.QGroupBox(self.verticalLayoutWidget)
+        self.sector_plot_frame.setObjectName("sector_plot_frame")
+        self.sector_plot_layout = QtWidgets.QVBoxLayout(self.sector_plot_frame)
+        self.sector_plot_layout.setContentsMargins(0, 0, 0, 0)
+        self.MplWidget_4 = MplWidget(self.sector_plot_frame)
         self.MplWidget_4.setObjectName("MplWidget_4")
-        self.sector_plot_page_layout.addWidget(self.MplWidget_4)
-        self.sector_plot_page_layout.addStretch(1)
-        self.sector_plot_tabWidget.addTab(self.sector_plot_page, "")
-        self.azim_plot_page = QtWidgets.QWidget()
-        self.azim_plot_page_layout = QtWidgets.QVBoxLayout(self.azim_plot_page)
-        self.azim_plot_page_layout.setContentsMargins(0, 0, 0, 0)
-        self.azim_plot_page_layout.addWidget(self.azim_params_widget)
-        self.MplWidget_5 = MplWidget(self.azim_plot_page)
-        self.MplWidget_5.setObjectName("MplWidget_5")
-        self.azim_plot_page_layout.addWidget(self.MplWidget_5)
-        self.azim_plot_page_layout.addStretch(1)
-        self.sector_plot_tabWidget.addTab(self.azim_plot_page, "")
-        self.verticalLayout_32.addWidget(self.sector_plot_tabWidget)
+        self.sector_plot_layout.addWidget(self.MplWidget_4)
+        self.verticalLayout_32.addWidget(self.sector_plot_frame)
+        self.verticalLayout_32.addStretch(1)
         self.tabWidget.addTab(self.tab, "")
+        self.tab_azim = QtWidgets.QWidget()
+        self.tab_azim.setObjectName("tab_azim")
+        self.verticalLayoutWidget_azim = QtWidgets.QWidget(self.tab_azim)
+        self.verticalLayoutWidget_azim.setGeometry(QtCore.QRect(0, 0, 1081, 591))
+        self.verticalLayoutWidget_azim.setObjectName("verticalLayoutWidget_azim")
+        self.verticalLayout_azim = QtWidgets.QVBoxLayout(self.verticalLayoutWidget_azim)
+        self.verticalLayout_azim.setContentsMargins(0, 0, 0, 0)
+        self.verticalLayout_azim.addWidget(self.azim_params_widget)
+        self.azim_plot_frame = QtWidgets.QGroupBox(self.verticalLayoutWidget_azim)
+        self.azim_plot_frame.setObjectName("azim_plot_frame")
+        self.azim_plot_layout = QtWidgets.QVBoxLayout(self.azim_plot_frame)
+        self.azim_plot_layout.setContentsMargins(0, 0, 0, 0)
+        self.MplWidget_5 = MplWidget(self.azim_plot_frame)
+        self.MplWidget_5.setObjectName("MplWidget_5")
+        self.azim_plot_layout.addWidget(self.MplWidget_5)
+        self.verticalLayout_azim.addWidget(self.azim_plot_frame)
+        self.verticalLayout_azim.addStretch(1)
+        self.tabWidget.addTab(self.tab_azim, "")
         self.tab_2 = QtWidgets.QWidget()
         self.tab_2.setObjectName("tab_2")
         self.image_tab_layout = QtWidgets.QHBoxLayout(self.tab_2)
@@ -998,9 +1013,13 @@ class Ui_SAXS_TOOLBOX(object):
         self.azim_plot_pushButton.setText(_translate("SAXS_TOOLBOX", "Plot"))
         self.azim_save_pushButton.setText(_translate("SAXS_TOOLBOX", "Save"))
         self.azim_save_pushButton.setToolTip(_translate("SAXS_TOOLBOX", "Write I(χ) .dat files to azimuthal_profiles/ next to the data"))
-        self.sector_plot_tabWidget.setTabText(0, _translate("SAXS_TOOLBOX", "Sector regrouping I(q)"))
-        self.sector_plot_tabWidget.setTabText(1, _translate("SAXS_TOOLBOX", "Azimuthal profile I(χ)"))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab), _translate("SAXS_TOOLBOX", "Sector regrouping"))
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_azim), _translate("SAXS_TOOLBOX", "Azimuthal profile"))
+        self.azim_shift_label.setText(_translate("SAXS_TOOLBOX", "shift (°)"))
+        self.azim_shift_doubleSpinBox.setToolTip(_translate("SAXS_TOOLBOX",
+            "Slides the viewing window along χ to [shift-180°, shift+180°]. Every χ shown is still the "
+            "true physical angle modulo 360°, so a feature at χ=-170° appears at 190° when shift=90: "
+            "the curve is re-cut at a different seam, not shifted arithmetically."))
         self.image_files_groupBox.setTitle(_translate("SAXS_TOOLBOX", "Images (sample files, grouped)"))
         self.saveSelectedImages_pushButton.setText(_translate("SAXS_TOOLBOX", "Save selected"))
         self.browseimage_pushButton_2.setText(_translate("SAXS_TOOLBOX", "Save all"))
@@ -1194,6 +1213,7 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         self.ui.width_lineEdit.setText('10')
         self.ui.azim_q_doubleSpinBox.setValue(0.05)
         self.ui.azim_threshold_doubleSpinBox.setValue(0.0025)
+        self.ui.azim_shift_doubleSpinBox.setValue(0)
         for line_edit in (self.ui.radial_qmin_display_lineEdit, self.ui.radial_qmax_display_lineEdit,
                           self.ui.sector_qmin_display_lineEdit, self.ui.sector_qmax_display_lineEdit):
             line_edit.setText("")
@@ -1594,7 +1614,8 @@ class ApplicationWindow(QtWidgets.QMainWindow):
 
     def _azimuthal_params(self):
         return dict(qvalue=self.ui.azim_q_doubleSpinBox.value(),
-                    threshold=self.ui.azim_threshold_doubleSpinBox.value())
+                    threshold=self.ui.azim_threshold_doubleSpinBox.value(),
+                    shift=self.ui.azim_shift_doubleSpinBox.value())
 
     def _radial_curves(self, ds, p):
         q, i = ds.radial_profile(p['azimuth'], p['width'])
@@ -1614,27 +1635,29 @@ class ApplicationWindow(QtWidgets.QMainWindow):
                 for n, (az, q, i) in enumerate(ds.sector_profiles(**p))]
 
     def _azimuthal_curves(self, ds, p):
-        chi, i = ds.azimuthal_profile(p['qvalue'], p['threshold'])
+        chi, i = ds.azimuthal_profile(p['qvalue'], p['threshold'], shift=p['shift'])
         return [dict(label=ds.label, x=chi, y=i, subdir='azimuthal_profiles',
-                     filename=f"{ds.label}_I(chi)_q={p['qvalue']:.4f}±{p['threshold']:.4f}.dat",
-                     columns="chi (deg)    I", description=f"Azimuthal profile, q={p['qvalue']:g} ± {p['threshold']:g} A^-1")]
+                     filename=f"{ds.label}_I(chi)_q={p['qvalue']:.4f}±{p['threshold']:.4f}_shift={p['shift']:g}.dat",
+                     columns="chi (deg)    I",
+                     description=f"Azimuthal profile, q={p['qvalue']:g} ± {p['threshold']:g} A^-1, shift={p['shift']:g} deg")]
 
     def _profile_spec(self, kind):
         return {
             'radial': dict(params=self._radial_params, curves=self._radial_curves, widget=self.ui.MplWidget,
-                           xlabel='Q ($\\AA^{-1}$)', loglog=True, page=None, format_coord=format_q_coord,
+                           xlabel='Q ($\\AA^{-1}$)', loglog=True, format_coord=format_q_coord,
                            display_range=lambda: (self.ui.radial_qmin_display_lineEdit,
                                                   self.ui.radial_qmax_display_lineEdit),
                            title=lambda p: "" if p['width'] >= 360 else f"azimuth {p['azimuth']:g}°, full width {p['width']:g}°"),
             'sector': dict(params=self._sector_params, curves=self._sector_curves, widget=self.ui.MplWidget_4,
-                           xlabel='Q ($\\AA^{-1}$)', loglog=True, page=0, format_coord=format_q_coord,
+                           xlabel='Q ($\\AA^{-1}$)', loglog=True, format_coord=format_q_coord,
                            display_range=lambda: (self.ui.sector_qmin_display_lineEdit,
                                                   self.ui.sector_qmax_display_lineEdit),
                            title=lambda p: ""),
             'azimuthal': dict(params=self._azimuthal_params, curves=self._azimuthal_curves, widget=self.ui.MplWidget_5,
-                              xlabel='$\\chi$ (°)', loglog=False, page=1, format_coord=format_chi_coord,
+                              xlabel='$\\chi$ (°)', loglog=False, format_coord=format_chi_coord,
                               display_range=None,
-                              title=lambda p: f"q = {p['qvalue']:g} ± {p['threshold']:g} $\\AA^{{-1}}$"),
+                              title=lambda p: (f"q = {p['qvalue']:g} ± {p['threshold']:g} $\\AA^{{-1}}$"
+                                               + (f",  shift {p['shift']:g}°" if p['shift'] else ""))),
         }[kind]
 
     def _optional_float_field(self, line_edit, name):
@@ -1685,8 +1708,6 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         params = spec['params']()
         key = self._profile_key(kind, params)
         if plot:
-            if spec['page'] is not None:
-                self.ui.sector_plot_tabWidget.setCurrentIndex(spec['page'])
             fig, ax = spec['widget'].canvas.figure, spec['widget'].canvas.axes
             ax.clear()
             ax.set_xlabel(spec['xlabel'])
