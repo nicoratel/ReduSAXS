@@ -812,6 +812,9 @@ class Ui_SAXS_TOOLBOX(object):
         self.drawSectors_checkBox = QtWidgets.QCheckBox(self.image_params_groupBox)
         self.drawSectors_checkBox.setObjectName("drawSectors_checkBox")
         self.image_options_row.addWidget(self.drawSectors_checkBox)
+        self.showRing_checkBox = QtWidgets.QCheckBox(self.image_params_groupBox)
+        self.showRing_checkBox.setObjectName("showRing_checkBox")
+        self.image_options_row.addWidget(self.showRing_checkBox)
         self.checkBox = QtWidgets.QCheckBox(self.image_params_groupBox)
         self.checkBox.setObjectName("checkBox")
         self.image_options_row.addWidget(self.checkBox)
@@ -1039,6 +1042,10 @@ class Ui_SAXS_TOOLBOX(object):
         self.cmap_comboBox.setItemText(3, _translate("SAXS_TOOLBOX", "inferno"))
         self.show_checkBox.setText(_translate("SAXS_TOOLBOX", "Show figure(s) when saving"))
         self.drawSectors_checkBox.setText(_translate("SAXS_TOOLBOX", "Draw integration sectors"))
+        self.showRing_checkBox.setText(_translate("SAXS_TOOLBOX", "Show azimuthal ring"))
+        self.showRing_checkBox.setToolTip(_translate("SAXS_TOOLBOX",
+            "Shades the ring q ± threshold that the azimuthal profile integrates over, "
+            "using the q and threshold of the Azimuthal profile tab"))
         self.drawSectors_checkBox.setToolTip(_translate("SAXS_TOOLBOX", "Uses the directions, angle, offset and half width of the Sector regrouping tab"))
         self.checkBox.setText(_translate("SAXS_TOOLBOX", "Rotate 90°"))
         self.saveNpz_checkBox.setText(_translate("SAXS_TOOLBOX", "Save .npz"))
@@ -1163,21 +1170,31 @@ class ApplicationWindow(QtWidgets.QMainWindow):
                           self.ui.vmin_lineEdit, self.ui.vmax_lineEdit, self.ui.offset_lineEdit, self.ui.width_lineEdit):
             line_edit.editingFinished.connect(self._schedule_preview)
         self.ui.cmap_comboBox.currentIndexChanged.connect(lambda *_: self._schedule_preview())
-        for check_box in (self.ui.drawSectors_checkBox, self.ui.checkBox):
+        for check_box in (self.ui.drawSectors_checkBox, self.ui.showRing_checkBox, self.ui.checkBox):
             check_box.toggled.connect(lambda *_: self._schedule_preview())
-        for spin_box in (self.ui.number_azimuthspinBox, self.ui.angle_spinBox):
+        for spin_box in (self.ui.number_azimuthspinBox, self.ui.angle_spinBox,
+                         self.ui.azim_q_doubleSpinBox, self.ui.azim_threshold_doubleSpinBox):
             spin_box.valueChanged.connect(lambda *_: self._schedule_preview())
         self.ui.nb_samples_averaged_lineEdit.editingFinished.connect(self._refresh_image_list)
         self.ui.tabWidget.currentChanged.connect(self._on_tab_changed)
         for canvas in (self.ui.MplWidget.canvas, self.ui.MplWidget_4.canvas,
                        self.ui.MplWidget_5.canvas, self.ui.image_preview_canvas):
             canvas.mpl_connect('motion_notify_event', self._show_cursor_position)
+            canvas.mpl_connect('figure_leave_event', lambda _event: self._show_cursor_position(None))
+        # A permanent widget, not a status message: hovering a menu entry or a
+        # toolbar button writes its tip to the status bar and would wipe a
+        # message, and permanent widgets are never covered by those tips.
+        self.cursor_readout = QtWidgets.QLabel()
+        self.cursor_readout.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
+        self.ui.statusbar.addPermanentWidget(self.cursor_readout, 1)
+        self._show_cursor_position(None)
 
         # Results of the last Plot per profile kind, so Save writes exactly what is shown.
         self._profile_cache = {}
         self.init_form()
         self.ui.show_checkBox.setChecked(False)
         self.ui.drawSectors_checkBox.setChecked(False)
+        self.ui.showRing_checkBox.setChecked(False)
         self.ui.saveNpz_checkBox.setChecked(False)
         self.ui.pyFAImask_checkBox.setChecked(True)
         self.ui.qminplot_lineEdit.setText("0")
@@ -1231,10 +1248,10 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         return self.path 
 
     def _show_cursor_position(self, event):
-        if event.inaxes is None:
-            self.ui.statusbar.clearMessage()
+        if event is None or event.inaxes is None:
+            self.cursor_readout.setText("Cursor:  move over a plot or image to read its coordinates")
         else:
-            self.ui.statusbar.showMessage(event.inaxes.format_coord(event.xdata, event.ydata))
+            self.cursor_readout.setText("Cursor:  " + event.inaxes.format_coord(event.xdata, event.ydata))
 
     def _log(self, text):
         self.ui.console_textEdit.moveCursor(QtGui.QTextCursor.End)
@@ -1803,6 +1820,8 @@ class ApplicationWindow(QtWidgets.QMainWindow):
             cmap=self.ui.cmap_comboBox.currentText(),
             rotate=self.ui.checkBox.isChecked(),
             draw_sectors=self.ui.drawSectors_checkBox.isChecked(),
+            ring=((self.ui.azim_q_doubleSpinBox.value(), self.ui.azim_threshold_doubleSpinBox.value())
+                  if self.ui.showRing_checkBox.isChecked() else None),
             **self._sector_params(),
         )
 
@@ -1865,7 +1884,8 @@ class ApplicationWindow(QtWidgets.QMainWindow):
             SAXSDataSet.draw_qmap(fig, ax, *qmap, qmax=params['qmax'], vmin=params['vmin'], vmax=params['vmax'],
                                   cmap=params['cmap'], qcircles=params['qcircles'], draw_sectors=params['draw_sectors'],
                                   nb_azimuths=params['nb_azimuths'], width=params['width'],
-                                  offset=params['offset'], delta=params['delta'], fontsize=9)
+                                  offset=params['offset'], delta=params['delta'], fontsize=9,
+                                  ring=params['ring'])
             ax.set_title(item.text().split('\n')[0], fontsize=10)
             fig.tight_layout()
         except Exception as exc:
@@ -1892,7 +1912,7 @@ class ApplicationWindow(QtWidgets.QMainWindow):
                 qcircles=params['qcircles'], cmap=params['cmap'], show=show, rotate=params['rotate'],
                 draw_sectors=params['draw_sectors'], nb_azimuths=params['nb_azimuths'], delta=params['delta'],
                 offset=params['offset'], width=params['width'],
-                save_npz=self.ui.saveNpz_checkBox.isChecked(), qmap_result=qmap)
+                save_npz=self.ui.saveNpz_checkBox.isChecked(), qmap_result=qmap, ring=params['ring'])
             self._log(f'SAXS image generated in {figname}')
             saved += 1
         self._log(f"{saved} image(s) saved.")

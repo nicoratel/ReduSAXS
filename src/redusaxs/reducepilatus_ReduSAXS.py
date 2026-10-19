@@ -619,8 +619,13 @@ class SAXSDataSet():
 
     @staticmethod
     def draw_qmap(fig, ax, QX, QZ, Z, qmax=0.2, vmin=-3, vmax=0, cmap='turbo', qcircles=None,
-                  draw_sectors=False, nb_azimuths=2, width=10, offset=0, delta=90, fontsize=12):
-        """Draw a qmap() result on ax, with optional constant-q circles and integration sectors (half width `width`)."""
+                  draw_sectors=False, nb_azimuths=2, width=10, offset=0, delta=90, fontsize=12,
+                  ring=None):
+        """
+        Draw a qmap() result on ax, with optional constant-q circles, integration
+        sectors (half width `width`), and ring=(q, threshold) shading the annulus
+        an azimuthal profile integrates over.
+        """
         norm = LogNorm(vmin=10**(vmin), vmax=10**vmax)
         mesh = ax.pcolormesh(QX, -QZ, Z, shading='auto', cmap=cmap, norm=norm)
         ax.set_xlabel(r"$Q_x (\AA^{-1})$", fontsize=fontsize)
@@ -631,6 +636,18 @@ class SAXSDataSet():
         ax.set_aspect('equal')
         fig.tight_layout()
 
+        # The map is a rectilinear grid (still so after rotate=True, which only
+        # turns it by 90 deg), so the value under the cursor is found from the two
+        # 1D axes rather than searching the whole 2D array on every mouse move.
+        X, Y = QX, -QZ
+        x_along_cols = not np.isclose(X[0, 0], X[0, -1])
+        xs = X[0, :] if x_along_cols else X[:, 0]
+        ys = Y[:, 0] if x_along_cols else Y[0, :]
+
+        def intensity_at(x, z):
+            ix, iz = int(np.argmin(np.abs(xs - x))), int(np.argmin(np.abs(ys - z)))
+            return Z[iz, ix] if x_along_cols else Z[ix, iz]
+
         def format_coord(x, z):
             q = math.hypot(x, z)
             # The image is drawn against -Qz and the sector wedges at -azimuth, so
@@ -638,10 +655,26 @@ class SAXSDataSet():
             parts = [f"q={q:.4f} A-1"]
             if q > 0:
                 parts.append(f"d={2 * np.pi / q / 10:.3f} nm")
-            parts.append(f"chi={-math.degrees(math.atan2(z, x)):.1f}deg")
+            # "+ 0.0" turns the -0.0 that negating atan2 gives on the x axis into 0.0
+            parts.append(f"chi={-math.degrees(math.atan2(z, x)) + 0.0:.1f}deg")
+            value = intensity_at(x, z)
+            parts.append(f"I/Imax={value:.3g}" if np.isfinite(value) else "I/Imax=--")
             return "   ".join(parts)
 
         ax.format_coord = format_coord
+
+        if ring is not None:
+            # Keep the view on the map even when the ring reaches past it.
+            xlim, ylim = ax.get_xlim(), ax.get_ylim()
+            q_ring, threshold = (float(v) for v in ring)
+            inner, outer = max(q_ring - threshold, 0.0), q_ring + threshold
+            ax.add_patch(Wedge((0.0, 0.0), outer, 0, 360, width=outer - inner,
+                               facecolor='white', edgecolor='none', alpha=0.35, zorder=4))
+            theta = np.linspace(0, 2 * np.pi, 720)
+            for radius in (inner, outer):
+                ax.plot(radius * np.cos(theta), radius * np.sin(theta), color='white', lw=0.8, zorder=4)
+            ax.set_xlim(xlim)
+            ax.set_ylim(ylim)
 
         if qcircles is not None:
             colors = ['black','purple','pink','palegreen']
@@ -709,12 +742,14 @@ class SAXSDataSet():
             offset: float = 0,      # degrees
             delta: float = 90,      # degrees between sector centers
             save_npz: bool = False,
-            qmap_result=None
+            qmap_result=None,
+            ring=None
         ):
         QX, QZ, Z = qmap_result if qmap_result is not None else self.qmap(qmin, qmax, rotate)
         fig = plt.figure(dpi=200)
         self.draw_qmap(fig, fig.gca(), QX, QZ, Z, qmax=qmax, vmin=vmin, vmax=vmax, cmap=cmap, qcircles=qcircles,
-                       draw_sectors=draw_sectors, nb_azimuths=nb_azimuths, width=width, offset=offset, delta=delta)
+                       draw_sectors=draw_sectors, nb_azimuths=nb_azimuths, width=width, offset=offset, delta=delta,
+                       ring=ring)
 
         outputdir = self.folder +'/png_images/'
         os.makedirs(outputdir,exist_ok=True)
