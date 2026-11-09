@@ -40,20 +40,27 @@ py311_path = os.path.dirname(sys.executable) + os.sep
 # The package can be installed anywhere, so this is a data location rather
 # than the code location: $SAXS_ROOT_DIR if set, else the user's home.
 SAXS_ROOT_DIR = os.environ.get("SAXS_ROOT_DIR") or str(Path.home())
+# Mask search depth above the data folder when the data lie outside SAXS_ROOT_DIR
+# (sample subfolder -> run folder -> one more, in case of nested scans).
+MASK_SEARCH_LEVELS = 3
 
 
 def _is_within_saxs_dir(path):
     if not path or not os.path.isdir(path):
         return False
+    # normcase: Windows paths compare case-insensitively and with either slash
+    root = os.path.normcase(os.path.abspath(SAXS_ROOT_DIR))
     try:
-        return os.path.commonpath([os.path.abspath(path), SAXS_ROOT_DIR]) == SAXS_ROOT_DIR
-    except ValueError:
+        return os.path.commonpath([os.path.normcase(os.path.abspath(path)), root]) == root
+    except ValueError:      # Windows: different drives, e.g. data on T:\ and home on C:\
         return False
 
 
 def default_browse_dir(start_dir):
-    """start_dir if it lies inside the SAXS archive, else the SAXS root."""
-    return start_dir if _is_within_saxs_dir(start_dir) else SAXS_ROOT_DIR
+    """start_dir if it still exists, else the SAXS root. Data often lives outside
+    SAXS_ROOT_DIR (another drive or a network share on Windows), so any existing
+    folder is accepted."""
+    return start_dir if start_dir and os.path.isdir(start_dir) else SAXS_ROOT_DIR
 
 
 _LOGBOOK_NUMBER_RE = re.compile(r'[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?')
@@ -125,8 +132,11 @@ def find_directory_mask(data_file):
     and then walking up to the SAXS root: one mask usually covers a whole
     beamtime and sits at the run root, above per-sample subfolders. The
     shortest name wins, since variants carry extra suffixes (amask_corr.edf).
+    Data outside the SAXS root (another drive) is searched MASK_SEARCH_LEVELS up.
     """
     folder = os.path.dirname(os.path.abspath(data_file))
+    inside = _is_within_saxs_dir(folder)
+    levels = 0
     while True:
         try:
             candidates = sorted(
@@ -139,7 +149,8 @@ def find_directory_mask(data_file):
         if candidates:
             return os.path.join(folder, candidates[0])
         parent = os.path.dirname(folder)
-        if parent == folder or not _is_within_saxs_dir(parent):
+        levels += 1
+        if parent == folder or (not _is_within_saxs_dir(parent) if inside else levels > MASK_SEARCH_LEVELS):
             return None
         folder = parent
 
@@ -278,7 +289,8 @@ class FileByNameDialog(QtWidgets.QDialog):
 
 
 def pick_files_by_name(parent, start_dir, single_selection=False):
-    """Ask for a folder, then pick files in it by sample name. Returns (folder, files)."""
+    """Ask for a folder, then pick files in it by sample name. Returns (folder, files);
+    folder is returned even if the file list is then cancelled, so it can be remembered."""
     folder = QtWidgets.QFileDialog.getExistingDirectory(parent, "Select folder", default_browse_dir(start_dir))
     if not folder:
         return None, []
@@ -1115,7 +1127,11 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         # Intialize Menu
         self.ui.actionSet_Working_Directory.triggered.connect(self.getWD)
         self.ui.actionInitialize_Form.triggered.connect(self.init_form)
-        self.path = SAXS_ROOT_DIR
+        self.path = SAXS_ROOT_DIR     # working directory: where averaged .edf and png_images are written
+        # Last folder used in any file dialog, kept between sessions
+        # (Windows: registry under HKCU\Software\LPCNO\ReduSAXS; macOS: a plist).
+        self.settings = QtCore.QSettings("LPCNO", "ReduSAXS")
+        self.last_dir = default_browse_dir(str(self.settings.value("last_dir", "") or ""))
 
         # Viewer
         self.ui.actionOpen_view_image_2.triggered.connect(self.openfile4viewer) 
@@ -1244,6 +1260,7 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         folder = QtWidgets.QFileDialog.getExistingDirectory(self, 'Select the working directory', default_browse_dir(self.path))
         if folder:
             self.path = folder
+            self._remember_dir(folder)
         self._log(f"Working directory: {self.path}")
         return self.path 
 
@@ -1259,8 +1276,9 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         self.ui.console_textEdit.ensureCursorVisible()
 
     def openfile4viewer(self):
-        self.view_file_path=QtWidgets.QFileDialog.getOpenFileName( self,"Open image file","%s"%self.path,'*.edf')
+        self.view_file_path=QtWidgets.QFileDialog.getOpenFileName( self,"Open image file",self._last_dir(),'*.edf')
         self.view_file=self.view_file_path[0]
+        self._remember_dir(self.view_file)
         if self.view_file!='':
             subprocess.run(['fabio_viewer',self.view_file])         
         
@@ -1282,8 +1300,10 @@ class ApplicationWindow(QtWidgets.QMainWindow):
     
     def plotloglog(self):
         
-        filelist=QtWidgets.QFileDialog.getOpenFileNames( self,"Open 1D data file","%s"%self.path,'*.dat')
+        filelist=QtWidgets.QFileDialog.getOpenFileNames( self,"Open 1D data file",self._last_dir(),'*.dat')
         filenames=filelist[0]
+        if filenames:
+            self._remember_dir(filenames[0])
         
         plt.figure(1)
         plt.xlabel(r'Q ($\mathrm{\AA}^{-1}$ )')
@@ -1304,8 +1324,10 @@ class ApplicationWindow(QtWidgets.QMainWindow):
 
     def plotlinear(self):
         
-        filelist=QtWidgets.QFileDialog.getOpenFileNames( self,"Open 1D data file","%s"%self.path,'*.dat')
+        filelist=QtWidgets.QFileDialog.getOpenFileNames( self,"Open 1D data file",self._last_dir(),'*.dat')
         filenames=filelist[0]
+        if filenames:
+            self._remember_dir(filenames[0])
         
         plt.figure(1)
         plt.xlabel(r'Q ($\mathrm{\AA}^{-1}$ )')
@@ -1325,7 +1347,9 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         pass
 
     def edf2png(self):
-        filelist = QtWidgets.QFileDialog.getOpenFileNames(self, "Open edf files to convert", "%s" % self.path, '*.edf')
+        filelist = QtWidgets.QFileDialog.getOpenFileNames(self, "Open edf files to convert", self._last_dir(), '*.edf')
+        if filelist[0]:
+            self._remember_dir(filelist[0][0])
         for file in filelist[0]:
             edf_img = fabio.open(file)
             header=edf_img.header
@@ -1362,9 +1386,12 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         npzfile = QtWidgets.QFileDialog.getOpenFileNames(
             self, 
             "Open npz file corresponding to 2D image", 
-            "%s" % self.path, 
+            self._last_dir(), 
             '*.npz'
         )
+        if not npzfile[0]:
+            return
+        self._remember_dir(npzfile[0][0])
         print(npzfile[0][0])
         data = np.load(str(npzfile[0][0]))
         
@@ -1396,7 +1423,10 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         plt.show()       
     
     def average_edf_files(self):
-        file_list = QtWidgets.QFileDialog.getOpenFileNames(self, "Open edf files to average", "%s" % self.path, '*.edf')
+        file_list = QtWidgets.QFileDialog.getOpenFileNames(self, "Open edf files to average", self._last_dir(), '*.edf')
+        if not file_list[0]:
+            return
+        self._remember_dir(file_list[0][0])
         files=EdfFiles(file_list[0])
         outputname=self.path+f'/{files.samplename}_Averaged_Img_{files.number}.edf'
         files.writeedf(outputname,files.data,files.samplename)
@@ -1414,7 +1444,8 @@ class ApplicationWindow(QtWidgets.QMainWindow):
             qmin=0.001
             qmax=2
             qstep=0.001
-            pdbfile=QtWidgets.QFileDialog.getOpenFileName( self,"Open pdb file",self.path,'*.pdb')
+            pdbfile=QtWidgets.QFileDialog.getOpenFileName( self,"Open pdb file",self._last_dir(),'*.pdb')
+            self._remember_dir(pdbfile[0])
             pdbfilepath=pdbfile[0]
             # load pdb file
             pdbloader = sas_gen.PDBReader()
@@ -1443,8 +1474,11 @@ class ApplicationWindow(QtWidgets.QMainWindow):
     
     def generatemask(self):
         #try:
-        self.file4maskpath=QtWidgets.QFileDialog.getOpenFileNames( self,"Open image file to generate a mask","%s"%self.path,'*.edf')
+        self.file4maskpath=QtWidgets.QFileDialog.getOpenFileNames( self,"Open image file to generate a mask",self._last_dir(),'*.edf')
         self.file4maskpathname=self.file4maskpath[0]
+        if not self.file4maskpathname:
+            return
+        self._remember_dir(self.file4maskpathname[0])
         subprocess.run(['pyFAI-drawmask', f"{self.file4maskpathname[0]}"])
         
         #except:
@@ -1453,8 +1487,18 @@ class ApplicationWindow(QtWidgets.QMainWindow):
 
     ## Fonctions d'ouverture de fichiers
     
-    def _last_dir(self, files):
-        return os.path.dirname(files[0]) if files and files[0] else self.path
+    def _last_dir(self, files=None):
+        """Folder of the previous selection of this kind, else the last folder used in any dialog."""
+        return default_browse_dir(os.path.dirname(files[0]) if files and files[0] else self.last_dir)
+
+    def _remember_dir(self, path):
+        """Record the folder of a file or folder picked in a dialog, for this and later sessions."""
+        if not path:
+            return
+        folder = path if os.path.isdir(path) else os.path.dirname(path)
+        if os.path.isdir(folder):
+            self.last_dir = folder
+            self.settings.setValue("last_dir", folder)
 
     def _describe_files(self, files):
         names = find_logbook_samplenames(files)
@@ -1484,10 +1528,11 @@ class ApplicationWindow(QtWidgets.QMainWindow):
 
     def openmaskfile(self):
 
-        self.maskpath=QtWidgets.QFileDialog.getOpenFileNames( self,"Open pyFAI Mask File(s)",default_browse_dir(self._last_dir(self.maskpathname)),"Mask file from pyFAI *.edf" )
+        self.maskpath=QtWidgets.QFileDialog.getOpenFileNames( self,"Open pyFAI Mask File(s)",self._last_dir(self.maskpathname),"Mask file from pyFAI *.edf" )
         if not self.maskpath[0]:
             return self.maskpathname
         self.maskpathname=self.maskpath[0]
+        self._remember_dir(self.maskpathname[0])
         self.mask_autofilled = False
         #print(self.maskpathname)
         res = ''.join(os.path.basename(i) + '\n' 
@@ -1502,7 +1547,8 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         return self.maskpathname
     
     def openreffile(self):
-        _folder, files = pick_files_by_name(self, self._last_dir(self.refpathname))
+        folder, files = pick_files_by_name(self, self._last_dir(self.refpathname))
+        self._remember_dir(folder)
         if not files:
             self.ui.console_textEdit.insertPlainText("No reference file provided, please try again\n")
             return self.refpathname
@@ -1513,7 +1559,8 @@ class ApplicationWindow(QtWidgets.QMainWindow):
 
 
     def opendatafiles (self):
-        _folder, files = pick_files_by_name(self, self._last_dir(self.datafile_list))
+        folder, files = pick_files_by_name(self, self._last_dir(self.datafile_list))
+        self._remember_dir(folder)
         if not files:
             self._log("No data file provided, please try again")
             return self.datafile_list
@@ -1525,7 +1572,8 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         return self.datafile_list
 
     def openfile_calib_water(self):
-        _folder, files = pick_files_by_name(self, self._last_dir(self.water_calib_file))
+        folder, files = pick_files_by_name(self, self._last_dir(self.water_calib_file))
+        self._remember_dir(folder)
         if not files:
             self._log("No calibration file provided, please try again")
             return
@@ -1534,7 +1582,8 @@ class ApplicationWindow(QtWidgets.QMainWindow):
         self._log("Calibration file successfully provided.")
 
     def openfile_calib_water_ref(self):
-        _folder, files = pick_files_by_name(self, self._last_dir(self.water_ref_calib_file))
+        folder, files = pick_files_by_name(self, self._last_dir(self.water_ref_calib_file))
+        self._remember_dir(folder)
         if not files:
             self._log("No reference file provided, please try again")
             return
